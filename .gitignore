@@ -1,0 +1,12 @@
+venv/
+build/
+dist/
+*.exe
+*.spec
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
