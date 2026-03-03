@@ -139,11 +139,7 @@ def retry_remove_directory(dir_path, max_attempts=3):
     for attempt in range(max_attempts):
         try:
             if os.path.exists(dir_path):
-                if sys.platform == "win32":
-                    subprocess.run(["rd", "/s", "/q", dir_path], 
-                                 stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL, check=False)
-                else:
-                    shutil.rmtree(dir_path)
+                shutil.rmtree(dir_path)
             return True
         except Exception:
             if attempt < max_attempts - 1:
@@ -353,16 +349,15 @@ def clear_chrome_data():
                     results_queue
                 )
             futures.append(future)
-            
-            # Collect results from all profile processing threads
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    # Just count successful operations
-                    total_operations += 50  # Estimate total operations per profile
-                    total_success_count += 40  # Estimate successful operations
-                except:
-                    pass  # Ignore errors, just continue
+        
+        # Collect results from all profile processing threads
+        for future in as_completed(futures):
+            try:
+                success_count, ops_count = future.result()
+                total_operations += ops_count
+                total_success_count += success_count
+            except Exception:
+                pass  # Ignore errors, just continue
         
         # Process messages from the queue
         messages = []
@@ -374,10 +369,10 @@ def clear_chrome_data():
                 break
         
         # Sort and display messages
-        info_messages = [msg for msg_type, msg in messages if msg_type == "info"]
-        success_messages = [msg for msg_type, msg in messages if msg_type.endswith("_success")]
-        failed_messages = [msg for msg_type, msg in messages if msg_type.endswith("_failed")]
-        error_messages = [msg for msg_type, msg in messages if msg_type == "error"]
+        info_messages = [(msg_type, msg) for msg_type, msg in messages if msg_type == "info"]
+        success_messages = [(msg_type, msg) for msg_type, msg in messages if msg_type.endswith("_success")]
+        failed_messages = [(msg_type, msg) for msg_type, msg in messages if msg_type.endswith("_failed")]
+        error_messages = [(msg_type, msg) for msg_type, msg in messages if msg_type == "error"]
         
         # Display messages in order
         for _, message in info_messages:
