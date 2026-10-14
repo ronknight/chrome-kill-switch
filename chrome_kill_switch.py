@@ -100,6 +100,7 @@ CHROMIUM_DIRS = [
 FIREFOX_FILES = [
     "logins.json",
     "logins-backup.json",
+    "logins.db",
     "key4.db",
     "key3.db",
     "signons.sqlite",
@@ -184,6 +185,9 @@ SENSITIVE_ITEMS = {
     SAFARI: (SAFARI_FILES, SAFARI_DIRS),
 }
 
+# Firefox keeps the last signed-in account's email in prefs.js even after signedInUser.json is gone
+FIREFOX_ACCOUNT_PREFS = ('user_pref("services.sync.', 'user_pref("identity.fxaccounts.')
+
 
 def get_browsers():
     """Return every browser this tool knows about, with its data folders and process names for this OS."""
@@ -193,6 +197,8 @@ def get_browsers():
     if sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA") or join(home, "AppData", "Local")
         roaming = os.environ.get("APPDATA") or join(home, "AppData", "Roaming")
+        # The Microsoft Store build of Firefox keeps its data inside its app package
+        firefox_store = glob.glob(join(local, "Packages", "Mozilla.Firefox_*", "LocalCache"))
         chrome = ["chrome.exe", "chrome_crashpad_handler.exe", "chrome_elf.exe", "chromedriver.exe"]
         # msedgewebview2.exe is left alone - Outlook, Teams and other apps run on it
         edge = ["msedge.exe", "msedgedriver.exe"]
@@ -218,7 +224,11 @@ def get_browsers():
             Browser("Arc", CHROMIUM,
                     glob.glob(join(local, "Packages", "TheBrowserCompany.Arc_*", "LocalCache", "Local", "Arc",
                                    "User Data")), [], ["Arc.exe"]),
-            Browser("Firefox", FIREFOX, [join(roaming, "Mozilla", "Firefox")], [join(local, "Mozilla", "Firefox")],
+            Browser("Firefox", FIREFOX,
+                    [join(roaming, "Mozilla", "Firefox")]
+                    + [join(p, "Roaming", "Mozilla", "Firefox") for p in firefox_store],
+                    [join(local, "Mozilla", "Firefox")]
+                    + [join(p, "Local", "Mozilla", "Firefox") for p in firefox_store],
                     ["firefox.exe"]),
             Browser("Waterfox", FIREFOX, [join(roaming, "Waterfox")], [join(local, "Waterfox")], ["waterfox.exe"]),
             Browser("LibreWolf", FIREFOX, [join(roaming, "librewolf")], [join(local, "librewolf")],
@@ -349,6 +359,46 @@ def find_profiles(root, engine):
         if os.path.isdir(path):
             unique.setdefault(os.path.normcase(os.path.abspath(path)), path)
     return list(unique.values())
+
+
+def remove_firefox_account_prefs(profile_path):
+    """Drop the Firefox account and sync settings from prefs.js, keeping every other setting.
+    Returns True if any were removed."""
+    prefs_path = os.path.join(profile_path, "prefs.js")
+    try:
+        with open(prefs_path, encoding="utf-8", newline="") as f:
+            lines = f.readlines()
+        kept = [line for line in lines if not line.startswith(FIREFOX_ACCOUNT_PREFS)]
+        if len(kept) == len(lines):
+            return False
+        with open(prefs_path, "w", encoding="utf-8", newline="") as f:
+            f.writelines(kept)
+        return True
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def windows_work_accounts():
+    """Return the work or school organizations Windows itself is signed in to (empty off Windows)."""
+    if sys.platform != "win32":
+        return []
+    try:
+        output = subprocess.run(["dsregcmd", "/status"], capture_output=True, text=True, timeout=15).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+    status = {}
+    for line in output.splitlines():
+        key, separator, value = line.partition(" : ")
+        if separator:
+            status[key.strip()] = value.strip()
+
+    organizations = []
+    if status.get("AzureAdJoined") == "YES":
+        organizations.append(status.get("TenantName") or "your organization")
+    if status.get("WorkplaceJoined") == "YES":
+        organizations.append(status.get("WorkplaceTenantName") or "your organization")
+    return organizations
 
 
 def wait_for_input_with_timeout(timeout_seconds=3):
@@ -680,6 +730,11 @@ def clear_browser_data(browser):
                     except:
                         print("⚠️ Could not modify Local State file")
 
+    if browser.engine == FIREFOX:
+        for profile_path, profile_name in profiles:
+            if remove_firefox_account_prefs(profile_path):
+                print(f"🗑️ Removed saved account settings from prefs.js: {profile_name}")
+
     success_rate = (total_success_count / total_operations * 100) if total_operations > 0 else 0
     print(f"\n📊 {browser.name} clean-up completed: {success_rate:.1f}% successful ({total_success_count}/{total_operations} operations)")
 
@@ -733,6 +788,14 @@ def main():
             elapsed_time = end_time - start_time
             print(f"\n❌ Some browser data could not be cleared. Check the log above.")
             print(f"⏱️ Operation completed in {elapsed_time:.2f} seconds.")
+
+        # Edge (and Microsoft sign-in pages) offer the account Windows is signed in to - no browser file holds it
+        for organization in windows_work_accounts():
+            print(f"\n⚠️ Windows itself is signed in to a work or school account ({organization}).")
+            print("   Edge and Microsoft sign-in pages get that account from Windows, so they will keep offering it")
+            print("   (or sign straight back in) - deleting browser data cannot remove it.")
+            print("   To remove it: Settings > Accounts > Access work or school > Disconnect.")
+            print("   That also signs out Outlook, Teams and OneDrive, and on a company PC may need your IT admin.")
 
         print("\n👋 Press Enter to exit (3 second timeout)...", end="")
         sys.stdout.flush()
