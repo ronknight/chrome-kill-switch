@@ -1,0 +1,7 @@
+LICENSE
+README.md
+setup.py
+chrome_kill_switch.egg-info/PKG-INFO
+chrome_kill_switch.egg-info/SOURCES.txt
+chrome_kill_switch.egg-info/dependency_links.txt
+chrome_kill_switch.egg-info/top_level.txt
